@@ -1,0 +1,6 @@
+seed_paper_ids: # list of seed papers to graph traverse: can be arxiv or doi or scholar ID: Note the below are all the same paper
+  - a2ce1fb96c0b78bee18bb2cb2c3d55dc48d54cbd # example scholar ID
+  #- arXiv:1906.07337 # example arxiv ID
+  #- 10.18653/v1/2020.acl-main.468" # example DOI
+
+output_dir: results/
