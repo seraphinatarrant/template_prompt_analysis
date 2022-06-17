@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from typing import List
 from tqdm import tqdm
@@ -7,23 +8,13 @@ import yaml
 import s2
 import csv
 
-
-def setup_argparse():
-    p = argparse.ArgumentParser()
-    p.add_argument('-c', dest='config_file', default='../config/semantic_graph_search.yaml',
-                   help='a yaml config containing necessary API information')
-    # p.add_argument('-d', dest='output_dir', default='../outputs/D4/', help='dir to write output summaries to')
-    # p.add_argument('-m', dest='model_path', default='', help='path for a pre-trained embedding model')
-    return p.parse_args()
+HEADERS = ["Title", "Section", "Influential", "Year", "Authors", "Abstract", "URL", "DOI", "Arxiv"]
 
 
-def read_yaml_config(config_file):
-    return yaml.load(open(config_file))
-
-def make_row(paperID, p) -> List:
+def make_row(p) -> List:
     p_full = s2.api.get_paper(paperId=p.paperId)
     authors = ";".join([a.name for a in p_full.authors])
-    return [p.title, ";".join(p.intent), p.isInfluential, authors,
+    return [p.title, ";".join(p.intent), p.isInfluential, p.year, authors,
             p_full.abstract, p.url, p_full.doi, p_full.arxivId]
 
 
@@ -35,45 +26,55 @@ def check_rate_limit(curr_count: int, max_call: int) -> int:
     return curr_count
 
 
+def setup_argparse():
+    p = argparse.ArgumentParser()
+    p.add_argument('-c', dest='config_file', default='config/citation_graph.yaml',
+                   help='a yaml config containing necessary API information')
+    return p.parse_args()
+
+
+def read_yaml_config(config_file):
+    return yaml.safe_load(open(config_file))
+
+
+def make_paper_reference(paper) -> str:
+    first_author_name = paper.authors[0].name.split()[-1]
+    return f"{first_author_name}{paper.year}"
+
+
 if __name__ == "__main__":
     args = setup_argparse()
 
-    # print("Reading config...")
-    # config = read_yaml_config(args.config_file)
+    print(f"Reading config {args.config_file}...")
+    config = read_yaml_config(args.config_file)
 
-    pid = "a2ce1fb96c0b78bee18bb2cb2c3d55dc48d54cbd"
-    pid2 = "arXiv:1906.07337"
-    pid3 = "10.18653/v1/2020.acl-main.468"
+    for pid in config["seed_paper_ids"]:
+        paper = s2.api.get_paper(paperId=pid)
 
-    paper = s2.api.get_paper(paperId=pid)
-    paper2 = s2.api.get_paper(paperId=pid2)
-    paper3 = s2.api.get_paper(paperId=pid3)
+        citation_rows, reference_rows = [], []
+        root_paper = make_paper_reference(paper)
 
-    HEADERS = ["Title", "Section", "Influential", "Authors", "Abstract", "URL", "DOI", "Arxiv"]
-    citation_rows, reference_rows = [], []
-    #root_paper = make_row(paper.paperId, ) TODO this will have different fields
-    # Get all citations and references for a paper:
-    max_call = 100
-    curr_count = 1
-    print(f"{len(paper.citations)} Citations")
-    for c in tqdm(paper.citations):
-        citation_rows.append(make_row(c.paperId, c))
-        curr_count = check_rate_limit(curr_count, max_call)
-    print(f"{len(paper.references)} References")
-    for r in tqdm(paper.references):
-        reference_rows.append(make_row(r.paperId, r))
-        curr_count = check_rate_limit(curr_count, max_call)
+        # Get all citations and references for a paper:
+        max_call = 100
+        curr_count = 1
+        print(f"{len(paper.citations)} Citations")
+        for c in tqdm(paper.citations):
+            citation_rows.append(make_row(c))
+            curr_count = check_rate_limit(curr_count, max_call)
+        print(f"{len(paper.references)} References")
+        for r in tqdm(paper.references):
+            reference_rows.append(make_row(r))
+            curr_count = check_rate_limit(curr_count, max_call)
 
-
-    # then write a csv of them
-    file2papers = {
-        "kurita2019_citations.csv" : citation_rows,
-        "kurita2019_reference.csv": reference_rows
-    }
-    for file, papers in file2papers.items():
-        with open(file, "w", newline='') as fout:
-            csvwriter = csv.writer(fout)
-            csvwriter.writerow(HEADERS)
-            for row in papers:
-                csvwriter.writerow(row)
+        # write a csv of them
+        file2papers = {
+            os.path.join(config["output_dir"], f"{root_paper}_citations.csv"): citation_rows,
+            os.path.join(config["output_dir"], f"{root_paper}_references.csv"): reference_rows
+        }
+        for file, papers in file2papers.items():
+            with open(file, "w", newline='') as fout:
+                csvwriter = csv.writer(fout)
+                csvwriter.writerow(HEADERS)
+                for row in papers:
+                    csvwriter.writerow(row)
 
