@@ -20,7 +20,7 @@ import s2
 import csv
 
 HEADERS = ["Title", "Section", "Influential", "Year", "Authors", "Abstract", "URL", "DOI", "Arxiv"]
-SUMMARY_HEADERS = ["Cites", "ReferencedBy"]
+SUMMARY_HEADERS = ["Cite Count", "Cites", "Reference Count", "ReferencedBy", ]
 
 
 def make_row(p) -> List:
@@ -33,6 +33,7 @@ def make_row(p) -> List:
 def check_rate_limit(curr_count: int, max_call: int) -> int:
     curr_count += 1
     if curr_count == max_call:
+        print("Sleeping for 5 min")
         time.sleep(300)
         curr_count = 0
     return curr_count
@@ -69,6 +70,19 @@ def check_include(p, config) -> bool:
     return True
 
 
+def update_paper_row(paper_id, new_row, paper2row):
+    # convert influential to count
+    influential = 0 if new_row[2] == False else 1
+
+    if paper_id not in paper2row:
+        new_row[2] = influential
+        paper2row[paper_id] = new_row
+    else: # Update "Section", "Influential", which are indices 1 and 2 respectively
+        sections = set(new_row[1].split(";")) | set(paper2row[paper_id][1].split(";"))
+        influential_count = sum([paper2row[paper_id][2], influential])
+        paper2row[paper_id][1] = ":".join(sections)
+        paper2row[paper_id][2] = influential_count
+
 
 if __name__ == "__main__":
     args = setup_argparse()
@@ -76,15 +90,16 @@ if __name__ == "__main__":
     print(f"Reading config {args.config_file}...")
     config = read_yaml_config(args.config_file)
 
-    #TODO finish union csv
-    #seed2paper_ref = defaultdict(lambda: defaultdict(list))  # for generating union, which adds columns
-    #all_papers = set() # also for union csv at end
+    paper2seed_ref = defaultdict(lambda: defaultdict(list))  # for generating union, which adds columns
+    all_papers = set() # also for union csv at end
+    paper2row = {}
 
     for pid in config["seed_paper_ids"]:
         paper = s2.api.get_paper(paperId=pid)
 
         citation_rows, reference_rows = [], []
         root_paper = make_paper_reference(paper)
+        print(f"Working on {root_paper}...")
 
         # Get all citations and references for a paper:
         max_call = 100
@@ -93,17 +108,25 @@ if __name__ == "__main__":
         for c in tqdm(paper.citations):
             if not check_include(c, config):
                 continue
-            #seed2paper_ref[c.paperID]["citation"].append(root_paper)
-            #all_papers.add(c)
-            citation_rows.append(make_row(c))
+            #store for later
+            paper2seed_ref[c.paperId]["citation"].append(root_paper)
+            all_papers.add(c.paperId)
+            new_row = make_row(c)
+            update_paper_row(c.paperId, new_row, paper2row)
+            #write
+            citation_rows.append(new_row)
             curr_count = check_rate_limit(curr_count, max_call)
         print(f"{len(paper.references)} References")
         for r in tqdm(paper.references):
             if not check_include(r, config):
                 continue
-            #seed2paper_ref[c.paperID]["reference"].append(root_paper)
-            #all_papers.add(c)
-            reference_rows.append(make_row(r))
+            # store
+            paper2seed_ref[c.paperId]["reference"].append(root_paper)
+            all_papers.add(c.paperId)
+            new_row = make_row(c)
+            update_paper_row(c.paperId, new_row, paper2row)
+            # write
+            reference_rows.append(new_row)
             curr_count = check_rate_limit(curr_count, max_call)
 
         # write a csv of them
@@ -122,7 +145,17 @@ if __name__ == "__main__":
                 for row in papers:
                     csvwriter.writerow(row)
 
-    # make union csv TODO
+    union_path = os.path.join(config["output_dir"], "all_papers_union.csv")
+    with open(union_path, "w", newline='') as fout:
+        csvwriter = csv.writer(fout)
+        csvwriter.writerow(HEADERS + SUMMARY_HEADERS)
+        for paper in all_papers:
+            num_refs = len(paper2seed_ref[paper]["reference"])
+            num_cites = len(paper2seed_ref[paper]["citation"])
+            refs = ";".join(paper2seed_ref[paper]["reference"])
+            cites = ";".join(paper2seed_ref[paper]["citation"])
+            csvwriter.writerow(paper2row[paper] + [num_cites, cites, num_refs, refs])
+
 
 
 
